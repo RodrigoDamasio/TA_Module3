@@ -50,7 +50,8 @@ backend/
 │   │   ├── scheduler.py      # DAG scheduler (parallel ready steps, thread pool)
 │   │   ├── agents/
 │   │   │   ├── base.py       # structured call: tools loop (≤ 2) → schema answer → repair once
-│   │   │   ├── analyzer.py  planner.py  executor.py  verifier.py
+│   │   │   ├── pipeline.py   # the 4 agents (Analyzer, Planner, Executor, Verifier)
+│   │   ├── migrations.py     # MigrationService: submit / approve / reject / rollback (API use cases)
 │   │   ├── context.py        # per-step context assembly, token budget (Lab 2 estimate)
 │   │   ├── budget.py         # per-job LLM call budget (loop guard)
 │   │   └── prompts.py        # Lab 2 loader
@@ -60,11 +61,10 @@ backend/
 │   │   ├── gemini_client.py  llm_decorators.py  demo_llm.py      # from Lab 2
 │   │   ├── caching_llm.py    # CachingLLMClient (identical request → stored response)
 │   │   ├── database.py       # SQLite connection + schema
-│   │   ├── sqlite_jobs.py    # JobRepository: jobs, events, file versions
-│   │   ├── sqlite_episodes.py
+│   │   ├── sqlite_store.py   # JobRepository (jobs + events), EpisodeStore, response cache
 │   │   ├── runner.py         # background worker thread + queue
 │   │   └── samples.py
-│   ├── api/                  # routes.py, sse.py, schemas.py, problems.py, guards.py, dependencies.py
+│   ├── api/                  # routes.py (incl. SSE), schemas.py, problems.py, guards.py, dependencies.py
 │   ├── config.py  main.py
 ├── samples/   # 4 sample projects + expected.json + results/ (stored completed jobs)
 ├── eval/      # evaluation harness
@@ -257,7 +257,7 @@ Scheduler: while steps remain, submit every `ready_steps()` to a `ThreadPoolExec
 
 ### 7.5 Rollback (extension)
 
-- `file_versions` is append-only: `(job_id, path, version, step_id, content, created_at, hidden)`.
+- File versions are append-only: `(path, version, step_id, content, hidden)`, stored inside the job's `state_json` (see §16).
 - Step failure → that step's versions hidden automatically.
 - `POST /migrations/{id}/rollback` (only `completed`/`failed`) → all migrated versions hidden, steps `rolled_back`, phase `rolled_back`; `GET` then shows the original sources only. History stays queryable (`?include_history=true`).
 
@@ -409,6 +409,9 @@ Execute step {step_id} of {step_count}: {step_title}
 # Files this step reads (source)
 {numbered_source_files}
 
+# Files already migrated by earlier steps (target framework — use their API exactly)
+{migrated_dependencies}          ← added in prompt v2 (§16)
+
 # Current content of the files this step writes (from earlier steps; empty if new)
 {current_target_files}
 
@@ -458,8 +461,11 @@ Verify the migration.
    status codes, error cases)?
 2. Are there bugs introduced by the migration (wrong types, missing awaits, lost
    validation, changed defaults)?
-3. Are target-framework idioms used correctly?
-4. What edge cases are not handled?
+3. Do the migrated files agree with each other? Every name imported from another
+   migrated file must exist there, and every constructor call, attribute and method used
+   on its objects must match its definition.          ← added in prompt v2 (§16)
+4. Are target-framework idioms used correctly?
+5. What edge cases are not handled?
 
 Rate confidence 1–10. If confidence < 7, list concrete issues (severity, file, line,
 message). Do not repeat failed automatic checks as new issues — reference them.
@@ -505,6 +511,7 @@ def check_python(files: dict[str, str]) -> list[Check]:
 |---|---|
 | `parses`, `compiles` | Every migrated `.py` file |
 | `lint` | No `F821` (undefined name) / `F811`; unused imports reported as low severity |
+| `imports_resolve` | Every name imported from another migrated file (`from models import X`, `models.X`) is defined there — also run on each step's output, before it is accepted (§16) |
 | `framework_migrated` | No `forbidden_imports`/`forbidden_idioms`; `required_import` present |
 | `routes_preserved` | Source routes ⊆ target routes (method+path; Django: path only) |
 | `verifier_confidence` | Verifier confidence ≥ 7 |
@@ -517,9 +524,8 @@ def check_python(files: dict[str, str]) -> list[Check]:
 
 | Table | Key columns |
 |---|---|
-| `jobs` | `id` PK, `pair`, `phase`, `state_json`, `client_ip_hash`, `created_at`, `updated_at` |
+| `jobs` | `id` PK, `pair`, `phase`, `state_json` (incl. file versions), `created_at`, `updated_at` |
 | `events` | `id` INTEGER PK (SSE event id), `job_id`, `type`, `data_json`, `created_at` |
-| `file_versions` | `job_id`, `path`, `version`, `step_id`, `content`, `hidden` |
 | `episodes` | `id`, `pair`, `outcome`, `summary_json`, `created_at` |
 | `llm_cache` | `key` PK (SHA-256 of model + system + messages + tools + schema), `response_json` |
 
@@ -752,3 +758,20 @@ railway variables --set "FRONTEND_ORIGIN=http://localhost:3000,https://<vercel-d
 - [ ] Evaluation meets §12.3 targets; report committed
 - [ ] Deployed; V1–V8 pass; `DEPLOY.md` written from the steps run
 - [ ] No secret in repository, logs, or history
+
+## 16. Implementation notes (deviations from this plan)
+
+Implemented in steps 1–7 (commits `dde1336` … `6c3bb7c`). Where the code differs from the plan above:
+
+| Plan | Implementation | Why |
+|---|---|---|
+| `file_versions` table | Versions live in the job's `state_json` | One atomic write per transition, together with the events; the job is small (≤ 30,000 source chars) |
+| `sqlite_jobs.py` + `sqlite_episodes.py` | One `sqlite_store.py` (jobs + events, episodes, response cache) | Same SQL rules in one module |
+| `agents/analyzer.py` … `verifier.py` | `agents/pipeline.py` (class `Agents`) on top of `agents/base.py` | Each agent is ~30 lines; the shared parts are in `base.py` |
+| API calls the orchestrator directly | `application/migrations.py` (`MigrationService`) holds the use cases; a `JobRunner` port hides the thread runner | Keeps `api/` thin and the use cases testable without HTTP |
+| `client_ip_hash` column | Not stored: the rate limiter keeps IPs only in memory | Nothing to hash when nothing is persisted |
+| `503` when the daily quota is gone | New jobs are refused up front while the circuit breaker is open | A job would otherwise fail in its first call |
+| `eval.record_cassettes` (~3 calls) | Not re-recorded: the adapter tests use Lab 2's real cassettes (same adapter) | Quota saved; mapping already covered |
+| Executor sees only its step's files | Also sees the **files migrated by its dependency steps**; new `imports_resolve` check (verification + step retry); Verifier checklist item — **prompt v2** | The first real run (`flask_todo`, v1) produced a `main.py` that used the *source* `models.py` API after step 1 had rewritten it; checks passed and the Verifier said 10/10 |
+
+**Evaluation** (`gemini-3.5-flash-lite`, prompt v2): 4/4 samples completed, every target met, 5.8 calls per job; 26 real calls in total for the smoke + fix + full runs. See [backend/README.md](backend/README.md#evaluation-results) and [backend/eval/report_full.md](backend/eval/report_full.md).
