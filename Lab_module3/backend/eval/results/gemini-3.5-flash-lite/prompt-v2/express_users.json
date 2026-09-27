@@ -1,0 +1,185 @@
+{
+  "job_id": "mig_fa0fb810ffb3",
+  "pair": "express-fastapi",
+  "phase": "completed",
+  "success": true,
+  "require_approval": false,
+  "migrated_files": [
+    {
+      "path": "main.py",
+      "content": "from fastapi import FastAPI\nfrom routers.users import router as users_router\n\napp = FastAPI()\n\napp.include_router(users_router)\n\n@app.get(\"/health\")\nasync def health_check():\n    return {\"status\": \"ok\"}\n",
+      "language": "python",
+      "step_id": 2,
+      "version": 1
+    },
+    {
+      "path": "routers/users.py",
+      "content": "import os\nfrom fastapi import APIRouter, HTTPException, status\nfrom pydantic import BaseModel\nimport bcrypt\nimport jwt\n\nrouter = APIRouter(prefix=\"/users\")\nusers = {}\n\nclass RegisterRequest(BaseModel):\n    email: str\n    password: str\n    name: str = None\n\nclass LoginRequest(BaseModel):\n    email: str\n    password: str\n\n@router.post(\"/register\", status_code=status.HTTP_201_CREATED)\nasync def register(body: RegisterRequest):\n    if not body.email or not body.password:\n        raise HTTPException(status_code=400, detail=\"Email and password required\")\n    if body.email in users:\n        raise HTTPException(status_code=400, detail=\"Email already registered\")\n    hashed_password = bcrypt.hashpw(body.password.encode(\"utf-8\"), bcrypt.gensalt()).decode(\"utf-8\")\n    users[body.email] = {\"email\": body.email, \"name\": body.name, \"password\": hashed_password}\n    return {\"email\": body.email, \"name\": body.name}\n\n@router.post(\"/login\")\nasync def login(body: LoginRequest):\n    user = users.get(body.email)\n    if not user or not bcrypt.checkpw(body.password.encode(\"utf-8\"), user[\"password\"].encode(\"utf-8\")):\n        raise HTTPException(status_code=401, detail=\"Invalid credentials\")\n    secret = os.environ.get(\"JWT_SECRET\", \"secret\")\n    token = jwt.encode({\"email\": body.email}, secret, algorithm=\"HS256\")\n    return {\"token\": token}\n\n@router.get(\"/{email}\")\nasync def get_user(email: str):\n    user = users.get(email)\n    if not user:\n        raise HTTPException(status_code=404, detail=\"Not found\")\n    return {\"email\": user[\"email\"], \"name\": user[\"name\"]}\n",
+      "language": "python",
+      "step_id": 1,
+      "version": 1
+    }
+  ],
+  "source_files": [
+    {
+      "path": "app.js",
+      "content": "// User service entry point (Express).\nconst express = require(\"express\");\nconst usersRouter = require(\"./routes/users\");\n\nconst app = express();\napp.use(express.json());\n\napp.get(\"/health\", (req, res) => {\n  res.json({ status: \"ok\" });\n});\n\napp.use(\"/users\", usersRouter);\n\napp.listen(3000, () => console.log(\"Listening on 3000\"));\n"
+    },
+    {
+      "path": "routes/users.js",
+      "content": "// User routes: register, login, profile.\nconst express = require(\"express\");\nconst bcrypt = require(\"bcryptjs\");\nconst jwt = require(\"jsonwebtoken\");\n\nconst router = express.Router();\nconst users = new Map();\n\nrouter.post(\"/register\", async (req, res) => {\n  const { email, password, name } = req.body;\n  if (!email || !password) {\n    return res.status(400).json({ error: \"Email and password required\" });\n  }\n  if (users.has(email)) {\n    return res.status(400).json({ error: \"Email already registered\" });\n  }\n  const hash = await bcrypt.hash(password, 10);\n  users.set(email, { email, name, password: hash });\n  res.status(201).json({ email, name });\n});\n\nrouter.post(\"/login\", async (req, res) => {\n  const { email, password } = req.body;\n  const user = users.get(email);\n  if (!user || !(await bcrypt.compare(password, user.password))) {\n    return res.status(401).json({ error: \"Invalid credentials\" });\n  }\n  const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: \"7d\" });\n  res.json({ token });\n});\n\nrouter.get(\"/:email\", (req, res) => {\n  const user = users.get(req.params.email);\n  if (!user) {\n    return res.status(404).json({ error: \"Not found\" });\n  }\n  res.json({ email: user.email, name: user.name });\n});\n\nmodule.exports = router;\n"
+    }
+  ],
+  "analysis": {
+    "summary": "This is a simple Express.js application providing user authentication (register, login) and profile retrieval, along with a health check endpoint. It uses an in-memory Map for storing user data, bcryptjs for password hashing, and jsonwebtoken for session tokens.",
+    "components": [
+      "app.js: Entry point for the Express application. Sets up middleware, health check route, and mounts the users router under /users.",
+      "routes/users.js: User routes handling registration, login, and profile lookup by email using an in-memory Map."
+    ],
+    "dependencies": [
+      "express",
+      "express.Router()",
+      "bcryptjs",
+      "jsonwebtoken"
+    ],
+    "patterns": [
+      "const app = express()",
+      "app.get(\"/x\", (req, res) => ...)",
+      "express.Router() + app.use(\"/p\", router)",
+      "\"/users/:id\"",
+      "req.body (with express.json())",
+      "req.params.id",
+      "res.status(201).json(obj)",
+      "return res.status(404).json({error})",
+      "async handler + await",
+      "bcryptjs / jsonwebtoken",
+      "process.env.X",
+      "app.listen(3000)"
+    ],
+    "risks": [
+      "routes/users.js line 7: In-memory Map used for user storage (const users = new Map()). State will not persist across restarts or scale across multiple worker processes in FastAPI/Uvicorn.",
+      "routes/users.js line 28: Relies on process.env.JWT_SECRET without a fallback or validation check."
+    ]
+  },
+  "plan": {
+    "revision": 1,
+    "steps": [
+      {
+        "id": 1,
+        "title": "Create users router",
+        "description": "Create routers/users.py with APIRouter(prefix=\"/users\"), handling POST /users/register, POST /users/login, and GET /users/{email} using bcrypt and PyJWT.",
+        "depends_on": [],
+        "complexity": "medium",
+        "source_files": [
+          "routes/users.js"
+        ],
+        "target_files": [
+          "routers/users.py"
+        ],
+        "status": "completed",
+        "attempts": 1,
+        "notes": "Migrated users router from Express.js to FastAPI using APIRouter, Pydantic models for request validation, bcrypt, and PyJWT. In-memory Map was replaced with a standard dictionary.",
+        "error": null
+      },
+      {
+        "id": 2,
+        "title": "Create main application",
+        "description": "Create main.py with FastAPI(), the GET /health route, and include the users router.",
+        "depends_on": [
+          1
+        ],
+        "complexity": "low",
+        "source_files": [
+          "app.js",
+          "routes/users.js"
+        ],
+        "target_files": [
+          "main.py"
+        ],
+        "status": "completed",
+        "attempts": 1,
+        "notes": "Created main.py with FastAPI app instance, health check endpoint, and included the users router.",
+        "error": null
+      }
+    ]
+  },
+  "verification": {
+    "passed": true,
+    "checks_passed": true,
+    "confidence": 10,
+    "verdict": "pass",
+    "checks": [
+      {
+        "name": "compiles",
+        "passed": true,
+        "detail": "main.py parses and compiles",
+        "file": "main.py"
+      },
+      {
+        "name": "compiles",
+        "passed": true,
+        "detail": "routers/users.py parses and compiles",
+        "file": "routers/users.py"
+      },
+      {
+        "name": "lint",
+        "passed": true,
+        "detail": "no blocking lint errors",
+        "file": null
+      },
+      {
+        "name": "imports_resolve",
+        "passed": true,
+        "detail": "imports between migrated files resolve",
+        "file": null
+      },
+      {
+        "name": "framework_migrated",
+        "passed": true,
+        "detail": "no Express.js imports left",
+        "file": null
+      },
+      {
+        "name": "routes_preserved",
+        "passed": true,
+        "detail": "4/4 routes",
+        "file": null
+      }
+    ],
+    "issues": []
+  },
+  "errors": [],
+  "history": [
+    {
+      "path": "routers/users.py",
+      "content": "import os\nfrom fastapi import APIRouter, HTTPException, status\nfrom pydantic import BaseModel\nimport bcrypt\nimport jwt\n\nrouter = APIRouter(prefix=\"/users\")\nusers = {}\n\nclass RegisterRequest(BaseModel):\n    email: str\n    password: str\n    name: str = None\n\nclass LoginRequest(BaseModel):\n    email: str\n    password: str\n\n@router.post(\"/register\", status_code=status.HTTP_201_CREATED)\nasync def register(body: RegisterRequest):\n    if not body.email or not body.password:\n        raise HTTPException(status_code=400, detail=\"Email and password required\")\n    if body.email in users:\n        raise HTTPException(status_code=400, detail=\"Email already registered\")\n    hashed_password = bcrypt.hashpw(body.password.encode(\"utf-8\"), bcrypt.gensalt()).decode(\"utf-8\")\n    users[body.email] = {\"email\": body.email, \"name\": body.name, \"password\": hashed_password}\n    return {\"email\": body.email, \"name\": body.name}\n\n@router.post(\"/login\")\nasync def login(body: LoginRequest):\n    user = users.get(body.email)\n    if not user or not bcrypt.checkpw(body.password.encode(\"utf-8\"), user[\"password\"].encode(\"utf-8\")):\n        raise HTTPException(status_code=401, detail=\"Invalid credentials\")\n    secret = os.environ.get(\"JWT_SECRET\", \"secret\")\n    token = jwt.encode({\"email\": body.email}, secret, algorithm=\"HS256\")\n    return {\"token\": token}\n\n@router.get(\"/{email}\")\nasync def get_user(email: str):\n    user = users.get(email)\n    if not user:\n        raise HTTPException(status_code=404, detail=\"Not found\")\n    return {\"email\": user[\"email\"], \"name\": user[\"name\"]}\n",
+      "language": "python",
+      "step_id": 1,
+      "version": 1,
+      "hidden": false
+    },
+    {
+      "path": "main.py",
+      "content": "from fastapi import FastAPI\nfrom routers.users import router as users_router\n\napp = FastAPI()\n\napp.include_router(users_router)\n\n@app.get(\"/health\")\nasync def health_check():\n    return {\"status\": \"ok\"}\n",
+      "language": "python",
+      "step_id": 2,
+      "version": 1,
+      "hidden": false
+    }
+  ],
+  "meta": {
+    "model": "gemini-3.5-flash-lite",
+    "prompt_version": "2",
+    "llm_calls": 0,
+    "cached_calls": 6,
+    "replans": 0,
+    "tokens": {
+      "input": 12487,
+      "output": 1929
+    },
+    "started_at": "2026-09-27T15:40:39+00:00",
+    "updated_at": "2026-09-27T15:40:40+00:00",
+    "finished_at": "2026-09-27T15:40:40+00:00",
+    "approval_requested_at": null
+  }
+}

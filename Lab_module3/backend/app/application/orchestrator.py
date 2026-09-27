@@ -92,7 +92,9 @@ class Orchestrator:
             while True:
                 step = job.plan.step(step_id)
                 files, notes = self.agents.execute_step(llm, job, pair, step, errors)
-                problems = code_checks.check_python(files)
+                with lock:
+                    project = job.current_files()
+                problems = code_checks.check_python(files, project)
                 with lock:
                     if not problems:
                         job.complete_step(step_id, files, notes)

@@ -17,8 +17,11 @@ Verify the migration.
    status codes, error cases)?
 2. Are there bugs introduced by the migration (wrong types, missing awaits, lost
    validation, changed defaults)?
-3. Are target-framework idioms used correctly?
-4. What edge cases are not handled?
+3. Do the migrated files agree with each other? Every name imported from another
+   migrated file must exist there, and every constructor call, attribute and method used
+   on its objects must match its definition (arguments, required fields).
+4. Are target-framework idioms used correctly?
+5. What edge cases are not handled?
 
 Rate confidence 1-10 and give a verdict (pass/fail). If confidence < 7, list concrete
 issues (severity, file, line, message). Do not repeat failed automatic checks as new

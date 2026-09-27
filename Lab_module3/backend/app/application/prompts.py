@@ -19,7 +19,7 @@ PLACEHOLDERS = frozenset(
         "example_pair", "plan_example", "step_id", "step_count", "step_title",
         "step_description", "numbered_sources", "current_targets", "target_files",
         "retry_block", "checks", "plan", "numbered_migrated", "validation_errors",
-        "check_errors",
+        "check_errors", "migrated_dependencies",
     }
 )  # fmt: skip
 

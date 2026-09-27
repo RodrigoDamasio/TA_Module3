@@ -3,11 +3,12 @@
 from pathlib import Path
 
 import pytest
+from conftest import reference_files, sample_files
 
 from app.domain.errors import UnsupportedMigration
 from app.frameworks import routes
 from app.frameworks.checks import check_python, verify
-from app.frameworks.imports import js_modules, py2_idioms, python_imports
+from app.frameworks.imports import js_modules, py2_idioms, python_imports, unresolved_imports
 from app.frameworks.registry import PAIRS, find_pair
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,3 +176,35 @@ def test_registry():
     assert len(PAIRS) == 4 and not PAIRS["python2-python3"].is_web
     with pytest.raises(UnsupportedMigration, match="Supported"):
         find_pair("rails", "fastapi")
+
+
+# Cross-file consistency: names imported from the project's own migrated files
+def test_unresolved_imports_between_project_files():
+    files = {
+        "models.py": "class Todo: ...\nif True:\n    FLAG = 1\n",
+        "pkg/__init__.py": "",
+        "pkg/store.py": "from ..models import Todo\nSTORE = {}\n",
+        "pkg/api.py": "from . import store\nfrom .store import STORE, MISSING\n",
+        "main.py": "import models\nfrom models import Todo, FLAG, Nope\nx = models.Gone\n"
+        "from fastapi import FastAPI\nfrom os import path\n",
+        "star.py": "from os import *\n",
+        "uses_star.py": "from star import anything\n",
+    }
+    problems = unresolved_imports(files)
+    assert problems == [
+        "pkg/api.py:2 imports 'MISSING' from pkg/store.py, which does not define it",
+        "main.py:2 imports 'Nope' from models.py, which does not define it",
+        "main.py:3 uses models.Gone, but models.py does not define 'Gone'",
+    ]
+    assert unresolved_imports(files, only={"models.py"}) == []
+
+
+def test_verify_reports_imports_resolve():
+    migrated = reference_files("flask-fastapi")
+    pair = PAIRS["flask-fastapi"]
+    sources = sample_files("flask-fastapi")
+    ok = {c.name: c for c in verify(pair, sources, migrated)}["imports_resolve"]
+    assert ok.passed
+    broken = migrated | {"models.py": migrated["models.py"].replace("TodoStore", "Store")}
+    bad = {c.name: c for c in verify(pair, sources, broken)}["imports_resolve"]
+    assert not bad.passed and bad.file == "main.py" and "TodoStore" in bad.detail

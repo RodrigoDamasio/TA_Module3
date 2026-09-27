@@ -151,6 +151,14 @@ class Agents:
         reads = {p: sources[p] for p in step.source_files if p in sources} or sources
         current = job.current_files()
         targets_now = {p: current.get(p, "") for p in step.target_files}
+        # Files already migrated by the steps this one depends on: the new code must use
+        # THEIR names and signatures, not the source's (cross-file consistency).
+        earlier = job.plan.ancestors(step.id) if job.plan else set()
+        upstream = {
+            v.path: current[v.path]
+            for v in job.versions
+            if v.step_id in earlier and v.path in current and v.path not in step.target_files
+        }
         retry = self.prompts.step_retry(bullet(check_errors)) if check_errors else ""
         call = AgentCall(
             system=self.prompts.system("executor", pair),
@@ -167,6 +175,7 @@ class Agents:
                 if any(targets_now.values())
                 else "(new files)",
                 target_files=", ".join(step.target_files),
+                migrated_dependencies=numbered_files(upstream) if upstream else "(none)",
                 retry_block=retry,
             ),
             lenient=StepLLM,

@@ -104,10 +104,14 @@ class Plan:
             s for s in self.steps if s.status is StepStatus.PENDING and set(s.depends_on) <= done
         ]
 
-    def dependents(self, step_id: int) -> list[PlanStep]:
+    def ancestors(self, step_id: int) -> set[int]:
+        """Every step that must finish before this one (dependencies, transitively)."""
         if not self._ancestors:
             self._ancestors = self._compute_ancestors()
-        return [s for s in self.steps if step_id in self._ancestors[s.id]]
+        return self._ancestors[step_id]
+
+    def dependents(self, step_id: int) -> list[PlanStep]:
+        return [s for s in self.steps if step_id in self.ancestors(s.id)]
 
     def is_finished(self) -> bool:
         return all(

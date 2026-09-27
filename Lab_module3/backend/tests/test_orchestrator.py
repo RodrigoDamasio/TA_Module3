@@ -276,3 +276,39 @@ def test_analyzer_tool_round_then_answer(harness):
     )
     notes = final.messages[1].text
     assert "Tool find_text returned" in notes and final.tools == []
+
+
+def step_prompts(llm: FakeLLM) -> list[str]:
+    return [
+        r.messages[0].text
+        for r in llm.requests
+        if r.response_schema and r.response_schema.__name__ == "StepLLM"
+    ]
+
+
+# Cross-file consistency (found in the first real Gemini run: step 2 used the SOURCE
+# models.py API while step 1 had already rewritten it).
+def test_executor_sees_the_files_its_dependencies_migrated(harness):
+    llm = FakeLLM(plan=PARALLEL_PLAN, step_files=PARALLEL_FILES)
+    h = harness(llm, parallel_steps=1)
+    assert h.run(h.new_job()).success
+    by_step = {p.split("\n", 1)[0]: p for p in step_prompts(llm)}
+    app_step = by_step["Execute step 3 of 3: Create app"]
+    upstream = app_step.split("# Files already migrated by earlier steps")[1].split("# Current")[0]
+    assert '<file path="models.py">' in upstream and '<file path="schemas.py">' in upstream
+    models_step = by_step["Execute step 1 of 3: Create models"]
+    assert "(none)" in models_step.split("# Files already migrated by earlier steps")[1]
+
+
+def test_step_importing_a_name_its_dependency_does_not_define_is_retried(harness):
+    wrong = REF["main.py"].replace("TodoStore", "TodoRepository")
+    llm = FakeLLM(
+        plan=PARALLEL_PLAN,
+        step_files={k: v for k, v in PARALLEL_FILES.items() if k != "main.py"},
+        step_sequence={"main.py": [wrong, REF["main.py"]]},
+    )
+    h = harness(llm)
+    job = h.run(h.new_job())
+    assert job.success, job.errors
+    assert job.plan.step(3).attempts == 2
+    assert "imports 'TodoRepository' from models.py" in step_prompts(llm)[-1]

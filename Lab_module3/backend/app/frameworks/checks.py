@@ -12,7 +12,7 @@ from pathlib import Path
 from app.domain.reports import Check
 
 from . import routes
-from .imports import py2_idioms, python_imports
+from .imports import py2_idioms, python_imports, unresolved_imports
 from .registry import FrameworkPair
 
 logger = logging.getLogger(__name__)
@@ -73,15 +73,18 @@ def _ruff(files: dict[str, str]) -> list[tuple[str, int, str, str]] | None:
         ]
 
 
-def check_python(files: dict[str, str]) -> list[str]:
-    """Problems that make a step's output unusable: syntax/compile errors, blocking lint.
-    Returns human-readable lines (fed back to the Executor on retry); [] means OK."""
+def check_python(files: dict[str, str], project: dict[str, str] | None = None) -> list[str]:
+    """Problems that make a step's output unusable: syntax/compile errors, blocking lint,
+    names imported from another project file that it does not define (`project` = the
+    other migrated files). Returns human-readable lines (fed back to the Executor on
+    retry); [] means OK."""
     py = {p: s for p, s in files.items() if p.endswith(".py")}
     problems = [msg for p, s in py.items() if (msg := _syntax(p, s))]
     if problems:
         return problems
     lint = _ruff(py) or []
-    return [f"{f}:{line} {code} {msg}" for f, line, code, msg in lint]
+    problems = [f"{f}:{line} {code} {msg}" for f, line, code, msg in lint]
+    return problems + unresolved_imports((project or {}) | py, only=set(py))
 
 
 def verify(pair: FrameworkPair, sources: dict[str, str], migrated: dict[str, str]) -> list[Check]:
@@ -108,6 +111,16 @@ def verify(pair: FrameworkPair, sources: dict[str, str], migrated: dict[str, str
                 next(iter(by_file), None),
             )
         )
+
+    unresolved = unresolved_imports(migrated)
+    checks.append(
+        Check(
+            "imports_resolve",
+            not unresolved,
+            "; ".join(unresolved) or "imports between migrated files resolve",
+            unresolved[0].split(":")[0] if unresolved else None,
+        )
+    )
 
     leftovers = []
     for path, content in migrated.items():

@@ -61,7 +61,7 @@ def test_migrate_returns_202_and_the_job_runs_in_the_background(api):
     assert view["migrated_files"][0]["language"] == "python"
     assert view["plan"]["steps"][0]["status"] == "completed"
     assert view["verification"]["passed"] and view["verification"]["confidence"] == 8
-    assert view["meta"]["model"] == "demo" and view["meta"]["prompt_version"] == "1"
+    assert view["meta"]["model"] == "demo" and view["meta"]["prompt_version"] == "2"
     assert view["meta"]["llm_calls"] == 5 and view["history"] is None
 
 

@@ -1,0 +1,3 @@
+llm_cache*.db*
+report_*_fake.md
+results/demo/
