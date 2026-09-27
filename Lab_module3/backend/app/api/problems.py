@@ -15,12 +15,13 @@ from starlette.responses import Response
 
 from app.config import get_settings
 from app.domain.errors import (
-    CodeTooLarge,
-    LLMBadResponse,
+    InputTooLarge,
+    InvalidPath,
+    InvalidTransition,
+    JobNotFound,
     LLMQuotaExceeded,
-    LLMRequestRejected,
-    LLMTimeout,
-    LLMUnavailable,
+    QueueFull,
+    UnsupportedMigration,
 )
 
 from .guards import RateLimited
@@ -77,47 +78,53 @@ MALFORMED_REQUEST = ProblemType(
     "The request body is not valid JSON.",
     "The request body could not be parsed as JSON.",
 )
-CODE_TOO_LARGE = ProblemType(
-    "code-too-large",
+JOB_NOT_FOUND = ProblemType(
+    "job-not-found",
+    404,
+    "Migration job not found.",
+    "No migration job has this id. Jobs are kept in the server's database.",
+)
+INVALID_TRANSITION = ProblemType(
+    "invalid-transition",
+    409,
+    "This action is not possible in the job's current phase.",
+    "Approve/reject need `awaiting_approval`; rollback needs `completed` or `failed`.",
+)
+INPUT_TOO_LARGE = ProblemType(
+    "input-too-large",
     413,
-    "The code is too large to analyze.",
-    "The submitted code exceeds the size limit. `detail` states the limit.",
+    "The project is too large to migrate.",
+    "Too many files or characters. `detail` states the limit.",
+)
+UNSUPPORTED_MIGRATION = ProblemType(
+    "unsupported-migration",
+    422,
+    "This migration is not supported.",
+    "The source → target pair is not supported. See GET /frameworks.",
 )
 RATE_LIMITED = ProblemType(
     "rate-limited",
     429,
-    "Too many analyses.",
-    "This client sent too many analyses. Retry after the `Retry-After` delay.",
-)
-LLM_BAD_RESPONSE = ProblemType(
-    "llm-bad-response",
-    502,
-    "The analysis could not be completed.",
-    "The model's answer was not a valid analysis, even after one repair attempt.",
-)
-LLM_REQUEST_REJECTED = ProblemType(
-    "llm-request-rejected",
-    502,
-    "The LLM provider rejected the request.",
-    "The model provider refused the request (configuration or content policy).",
+    "Too many migrations.",
+    "This client started too many migrations. Retry after the `Retry-After` delay.",
 )
 LLM_QUOTA_EXHAUSTED = ProblemType(
     "llm-quota-exhausted",
     503,
-    "The analysis limit has been reached.",
-    "The LLM provider's quota is used up. Retry after the `Retry-After` delay.",
+    "The migration limit has been reached.",
+    "The LLM provider's daily quota is used up. Retry after the `Retry-After` delay.",
 )
 LLM_UNAVAILABLE = ProblemType(
     "llm-unavailable",
     503,
-    "The analysis service is busy or unavailable.",
-    "The LLM provider is unavailable or too many analyses are in progress.",
+    "The migration service is busy.",
+    "Too many migrations are queued. Retry after the `Retry-After` delay.",
 )
-LLM_TIMEOUT = ProblemType(
-    "llm-timeout",
+WAIT_TIMEOUT = ProblemType(
+    "wait-timeout",
     504,
-    "The analysis took too long.",
-    "The LLM provider did not answer in time.",
+    "The migration is still running.",
+    "`?wait=true` gave up waiting. The job continues: follow `status_url` or `events_url`.",
 )
 INTERNAL_ERROR = ProblemType(
     "internal-error",
@@ -131,16 +138,23 @@ CATALOG = {
     for p in (
         VALIDATION_ERROR,
         MALFORMED_REQUEST,
-        CODE_TOO_LARGE,
+        JOB_NOT_FOUND,
+        INVALID_TRANSITION,
+        INPUT_TOO_LARGE,
+        UNSUPPORTED_MIGRATION,
         RATE_LIMITED,
-        LLM_BAD_RESPONSE,
-        LLM_REQUEST_REJECTED,
         LLM_QUOTA_EXHAUSTED,
         LLM_UNAVAILABLE,
-        LLM_TIMEOUT,
+        WAIT_TIMEOUT,
         INTERNAL_ERROR,
     )
 }
+
+
+class WaitTimeout(Exception):
+    def __init__(self, job_id: str, seconds: int) -> None:
+        super().__init__(f"Job {job_id} did not finish within {seconds}s; it is still running.")
+        self.job_id = job_id
 
 
 # ---- building responses ----------------------------------------------------
@@ -222,9 +236,30 @@ def _retry_after(seconds: float) -> dict[str, str]:
     return {"Retry-After": str(max(1, round(seconds)))}
 
 
-async def _code_too_large_handler(request: Request, exc: Exception) -> Response:
-    assert isinstance(exc, CodeTooLarge)  # noqa: S101 — narrows the type
-    return problem_response(request, CODE_TOO_LARGE, detail=exc.reason)
+def _simple(problem_type: ProblemType):
+    async def handler(request: Request, exc: Exception) -> Response:
+        return problem_response(request, problem_type, detail=str(exc))
+
+    return handler
+
+
+async def _invalid_path_handler(request: Request, exc: Exception) -> Response:
+    return problem_response(
+        request,
+        VALIDATION_ERROR,
+        detail="The request body has 1 invalid field.",
+        errors=[FieldError(detail=str(exc), pointer="#/files")],
+    )
+
+
+async def _wait_timeout_handler(request: Request, exc: Exception) -> Response:
+    assert isinstance(exc, WaitTimeout)  # noqa: S101 — narrows the type
+    return problem_response(
+        request,
+        WAIT_TIMEOUT,
+        detail=str(exc),
+        headers={"Location": f"/migrations/{exc.job_id}"},
+    )
 
 
 async def _rate_limited_handler(request: Request, exc: Exception) -> Response:
@@ -234,27 +269,19 @@ async def _rate_limited_handler(request: Request, exc: Exception) -> Response:
     )
 
 
-async def _llm_handler(request: Request, exc: Exception) -> Response:
-    if isinstance(exc, LLMQuotaExceeded):
-        when = "tomorrow" if exc.scope == "day" and exc.retry_after_s > 3600 else "shortly"
-        return problem_response(
-            request,
-            LLM_QUOTA_EXHAUSTED,
-            detail=f"The free-tier analysis quota is used up; try again {when}.",
-            headers=_retry_after(exc.retry_after_s or 60),
-        )
-    if isinstance(exc, LLMUnavailable):
-        return problem_response(
-            request, LLM_UNAVAILABLE, detail=str(exc), headers=_retry_after(exc.retry_after_s)
-        )
-    if isinstance(exc, LLMTimeout):
-        return problem_response(request, LLM_TIMEOUT, detail=str(exc))
-    if isinstance(exc, LLMRequestRejected):
-        logger.warning("LLM request rejected: status=%s", exc.status)
-        return problem_response(request, LLM_REQUEST_REJECTED, detail=str(exc))
-    assert isinstance(exc, LLMBadResponse)  # noqa: S101 — narrows the type
-    logger.warning("LLM bad response: %s", exc)
-    return problem_response(request, LLM_BAD_RESPONSE, detail=str(exc))
+async def _quota_handler(request: Request, exc: Exception) -> Response:
+    assert isinstance(exc, LLMQuotaExceeded)  # noqa: S101 — narrows the type
+    when = "tomorrow" if exc.retry_after_s > 3600 else "shortly"
+    return problem_response(
+        request,
+        LLM_QUOTA_EXHAUSTED,
+        detail=f"The free-tier LLM quota is used up; try again {when}.",
+        headers=_retry_after(exc.retry_after_s or 60),
+    )
+
+
+async def _busy_handler(request: Request, exc: Exception) -> Response:
+    return problem_response(request, LLM_UNAVAILABLE, detail=str(exc), headers=_retry_after(60))
 
 
 async def _http_exception_handler(request: Request, exc: Exception) -> Response:
@@ -285,10 +312,15 @@ class UnhandledErrorMiddleware(BaseHTTPMiddleware):
 
 def register_problem_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _validation_handler)
-    app.add_exception_handler(CodeTooLarge, _code_too_large_handler)
+    app.add_exception_handler(InvalidPath, _invalid_path_handler)
+    app.add_exception_handler(JobNotFound, _simple(JOB_NOT_FOUND))
+    app.add_exception_handler(InvalidTransition, _simple(INVALID_TRANSITION))
+    app.add_exception_handler(InputTooLarge, _simple(INPUT_TOO_LARGE))
+    app.add_exception_handler(UnsupportedMigration, _simple(UNSUPPORTED_MIGRATION))
     app.add_exception_handler(RateLimited, _rate_limited_handler)
-    for error in (LLMQuotaExceeded, LLMUnavailable, LLMTimeout, LLMRequestRejected, LLMBadResponse):
-        app.add_exception_handler(error, _llm_handler)
+    app.add_exception_handler(LLMQuotaExceeded, _quota_handler)
+    app.add_exception_handler(QueueFull, _busy_handler)
+    app.add_exception_handler(WaitTimeout, _wait_timeout_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
 
 

@@ -128,3 +128,11 @@ class MemoryStore(Protocol):
     """Long-term memory hook — Module 4 adds retrieval (RAG) behind this port."""
 
     def recall(self, query: str, limit: int) -> list[str]: ...
+
+
+class JobRunner(Protocol):
+    """Runs jobs outside the request (a background worker, or inline in tests)."""
+
+    def submit(self, job_id: str) -> None: ...
+
+    def has_capacity(self) -> bool: ...

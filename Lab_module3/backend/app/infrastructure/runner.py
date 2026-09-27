@@ -21,6 +21,9 @@ class InlineRunner:
     def submit(self, job_id: str) -> None:
         self._orchestrator.run(job_id)
 
+    def has_capacity(self) -> bool:
+        return True
+
     def start(self) -> None:
         pass
 
@@ -44,6 +47,9 @@ class ThreadRunner:
             self._queue.put_nowait(job_id)
         except queue.Full as err:
             raise QueueFull() from err
+
+    def has_capacity(self) -> bool:
+        return not self._queue.full()
 
     def start(self) -> None:
         self.recover()

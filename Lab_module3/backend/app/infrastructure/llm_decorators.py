@@ -102,10 +102,14 @@ class CircuitBreakerLLMClient:
         self._inner, self._clock = inner, clock
         self._open_until = 0.0
 
-    def generate(self, request: LLMRequest) -> LLMResponse:
+    def ensure_closed(self) -> None:
+        """Raise LLMQuotaExceeded while open — lets the API refuse new jobs up front."""
         remaining = self._open_until - self._clock()
         if remaining > 0:
             raise LLMQuotaExceeded("day", remaining)
+
+    def generate(self, request: LLMRequest) -> LLMResponse:
+        self.ensure_closed()
         try:
             return self._inner.generate(request)
         except LLMQuotaExceeded as err:

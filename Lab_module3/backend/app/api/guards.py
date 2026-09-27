@@ -1,4 +1,4 @@
-"""Per-client rate limiting (single instance, in memory). Only cache misses are counted."""
+"""Per-client rate limiting (single instance, in memory). Only new jobs are counted."""
 
 import threading
 import time
@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 class RateLimited(Exception):
     def __init__(self, retry_after_s: float, window: str) -> None:
-        super().__init__(f"Too many analyses this {window}; try again later.")
+        super().__init__(f"Too many migrations this {window}; try again later.")
         self.retry_after_s = retry_after_s
 
 
@@ -24,7 +24,7 @@ class RateLimiter:
         self._lock = threading.Lock()
 
     def check(self, client: str) -> None:
-        """Record one analysis for `client`, or raise RateLimited."""
+        """Record one new job for `client`, or raise RateLimited."""
         now = self._clock()
         with self._lock:
             hits = self._hits[client]
