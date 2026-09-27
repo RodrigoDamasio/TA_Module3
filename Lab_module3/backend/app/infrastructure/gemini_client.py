@@ -65,11 +65,17 @@ def to_contents(messages: list[Message]) -> list[types.Content]:
         if isinstance(m, UserMessage):
             contents.append(types.Content(role="user", parts=[types.Part(text=m.text)]))
         elif isinstance(m, AssistantMessage):
-            contents.append(
-                m.raw_turn
-                if m.raw_turn is not None
-                else types.Content(role="model", parts=[types.Part(text=m.text or "")])
-            )
+            if m.raw_turn is not None:
+                contents.append(m.raw_turn)
+                continue
+            # No provider turn (e.g. replayed from the response cache): rebuild it,
+            # including function_call parts so the following tool results stay valid.
+            parts = [types.Part(text=m.text)] if m.text else []
+            parts += [
+                types.Part(function_call=types.FunctionCall(id=c.id, name=c.name, args=c.args))
+                for c in m.tool_calls
+            ]
+            contents.append(types.Content(role="model", parts=parts or [types.Part(text="")]))
         elif isinstance(m, ToolResultsMessage):
             contents.append(
                 types.Content(
