@@ -1,0 +1,8 @@
+tests/
+eval/
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.db
+.coverage

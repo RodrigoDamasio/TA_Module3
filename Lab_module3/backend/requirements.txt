@@ -1,0 +1,6 @@
+fastapi>=0.141
+uvicorn>=0.53
+pydantic>=2.13
+google-genai>=2.25
+lizard>=1.24
+ruff>=0.16

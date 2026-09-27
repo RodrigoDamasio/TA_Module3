@@ -1,0 +1,23 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: calls the real Gemini API (spends quota) — run explicitly with -m live"]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# samples/ contains deliberately vulnerable code — it is test data for the analyzer
+extend-exclude = ["samples", "tests/fixtures"]
+
+[tool.ruff.lint]
+# S = flake8-bandit security rules; S608 flags SQL built from strings (SQL injection)
+select = ["E", "F", "I", "B", "UP", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S603"]  # plain asserts; subprocess used to run ruff
+"eval/**" = ["S101"]
+"app/frameworks/checks.py" = ["S603"]  # fixed-argv ruff subprocess on a temp copy
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
