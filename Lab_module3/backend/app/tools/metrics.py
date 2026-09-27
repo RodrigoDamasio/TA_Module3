@@ -1,18 +1,9 @@
-"""Deterministic code metrics with lizard (Python, JavaScript, TypeScript, Java, Go)."""
+"""Deterministic code metrics with lizard (from Lab 2, keyed by file extension)."""
 
+import posixpath
 from dataclasses import dataclass
 
 import lizard
-
-from app.domain.models import Language
-
-_FILENAMES = {
-    Language.PYTHON: "code.py",
-    Language.JAVASCRIPT: "code.js",
-    Language.TYPESCRIPT: "code.ts",
-    Language.JAVA: "Code.java",
-    Language.GO: "code.go",
-}
 
 
 @dataclass(frozen=True)
@@ -23,33 +14,25 @@ class FunctionInfo:
     complexity: int  # cyclomatic complexity (CCN)
 
 
-def analyze_functions(code: str, language: Language, line_offset: int = 0) -> list[FunctionInfo]:
-    info = lizard.analyze_file.analyze_source_code(_FILENAMES[language], code)
+def analyze_functions(path: str, code: str) -> list[FunctionInfo]:
+    name = "code" + (posixpath.splitext(path)[1] or ".py")
+    info = lizard.analyze_file.analyze_source_code(name, code)
     return [
-        FunctionInfo(
-            f.name, f.start_line + line_offset, f.end_line + line_offset, f.cyclomatic_complexity
-        )
+        FunctionInfo(f.name, f.start_line, f.end_line, f.cyclomatic_complexity)
         for f in info.function_list
     ]
 
 
-def complexity_hint(max_ccn: int) -> str:
-    if max_ccn <= 5:
-        return "low"
-    return "medium" if max_ccn <= 10 else "high"
-
-
-def code_metrics(code: str, language: Language, line_offset: int = 0) -> dict[str, object]:
-    functions = analyze_functions(code, language, line_offset)
+def code_metrics(path: str, code: str) -> dict[str, object]:
+    functions = analyze_functions(path, code)
     ccns = [f.complexity for f in functions] or [1]
     return {
+        "file": path,
         "lines_of_code": sum(1 for line in code.splitlines() if line.strip()),
         "functions": len(functions),
         "max_complexity": max(ccns),
-        "avg_complexity": round(sum(ccns) / len(ccns), 1),
-        "complexity_hint": complexity_hint(max(ccns)),
         "per_function": [
             {"name": f.name, "lines": f"{f.start}-{f.end}", "complexity": f.complexity}
-            for f in sorted(functions, key=lambda f: -f.complexity)
+            for f in sorted(functions, key=lambda f: -f.complexity)[:10]
         ],
     }
