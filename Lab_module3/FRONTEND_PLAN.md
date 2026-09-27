@@ -241,8 +241,27 @@ Vercel needs no new secret: the Gemini key stays on Railway only.
 
 ## 11. Definition of done
 
-- [ ] Every lab frontend requirement (§1), including the 4 extensions visible in the UI
-- [ ] typecheck, lint, unit/component tests (≥ 80 % coverage), build: 0 LLM calls
-- [ ] E1–E7 pass locally against the fake-LLM backend
-- [ ] Deployed to Vercel; CORS updated on Railway; E8 passes in production
-- [ ] `frontend/DEPLOY.md` with the steps run; `frontend/README.md`; plans updated if the design deviates
+- [x] Every lab frontend requirement (§1), including the 4 extensions visible in the UI
+- [x] typecheck, lint, 53 unit/component tests (~95 % lines), build: 0 LLM calls
+- [x] E1–E7 (+ E7b) pass locally against the fake-LLM backend: 11/11
+- [x] Deployed to Vercel (https://taller-migration-agent.vercel.app); CORS updated on Railway; production subset 7/7, incl. E8
+- [x] `frontend/DEPLOY.md` with the steps run; `frontend/README.md`; plans updated (§12)
+
+## 12. Implementation notes (deviations from this plan)
+
+| Plan | Implementation | Why |
+|---|---|---|
+| Rollback confirm in a native `<dialog>` | Inline confirmation ("Hide all generated files? The history is kept." + *Confirm rollback* / *Cancel*) | Same accessibility, simpler, testable in jsdom |
+| Two columns: input + plan / progress + files | Top row: **input │ progress** (stepper, log, approval, meta). Below, full width: **plan, verification, files** | The side-by-side diff needs the full width |
+| Extra modules | `lib/compare.ts` (Compare-with options, §5), `lib/download.ts`, `hooks/useReplay.ts` | Kept components small and testable |
+| E2E starts `npm run dev` | E2E builds and runs the **production** app (`next build && next start`) | The dev server hit the OS file-watch limit on this machine. A production build is also closer to Vercel |
+| — | `turbopack.root` set in `next.config.ts` | A stray `package-lock.json` in the home folder was being picked as the workspace root |
+| `vite-tsconfig-paths` (Lab 2) | Vite's native `resolve.tsconfigPaths` | The plugin is now redundant (Vite deprecation notice) |
+| Untouched empty file flagged as an error | Blank files are not flagged individually; the *Migrate* hint explains ("Add at least one file…") | Better first impression. Nothing is red before the user types |
+| E8 expected 0 calls (server cache) | **4 real + 2 cached** | The planner's prompt includes the episode recorded by the backend's V5 run (episodic memory), so only the analysis was a cache hit |
+
+**Bugs found by the tests and fixed:**
+- **Duplicate form ids after hydration (E2E).** The server and the browser each had their own module counter. Fixed with `useId`.
+- **Accessible name "Removefile 2" (component test).** Fixed with an explicit `aria-label`.
+- **Countdown measured from mount (component test).** Fixed so it counts from when the error arrived.
+- **Scrollable diff/code/activity regions not keyboard-focusable (axe).** Fixed with `tabIndex=0` and labelled regions.

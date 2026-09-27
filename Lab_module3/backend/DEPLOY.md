@@ -79,7 +79,7 @@ railway variables --set "FRONTEND_ORIGIN=http://localhost:3000,https://<vercel-d
 | `BASE_URL` | `https://backend-production-4d1c3.up.railway.app` |
 | `LLM_MIN_INTERVAL_S` | `6` |
 | `RATE_LIMIT_JOBS_PER_MINUTE` / `_PER_DAY` | `2` / `10` new jobs per client IP |
-| `FRONTEND_ORIGIN` | *(default `http://localhost:3000`; add the Vercel domain after the frontend deploy)* |
+| `FRONTEND_ORIGIN` | `http://localhost:3000,https://taller-migration-agent.vercel.app` |
 
 ## Post-deploy verification (results)
 
